@@ -278,6 +278,11 @@ pub struct DaemonState {
     pub wpasec_api_key: String,
     pub pending_wpasec_key: Option<String>,
 
+    // -- wigle --
+    pub wigle_api_name: String,
+    pub wigle_api_token: String,
+    pub pending_wigle_config: Option<(String, String)>,
+
     // -- discord --
     pub discord_webhook_url: String,
     pub discord_enabled: bool,
@@ -476,6 +481,9 @@ impl DaemonState {
             pending_capture_all: None,
             wpasec_api_key: String::new(),
             pending_wpasec_key: None,
+            wigle_api_name: String::new(),
+            wigle_api_token: String::new(),
+            pending_wigle_config: None,
             discord_webhook_url: String::new(),
             discord_enabled: false,
             pending_discord_config: None,
@@ -1330,6 +1338,20 @@ pub struct WpaSecUpdate {
     pub api_key: String,
 }
 
+/// WIGLE config response returned by GET /api/wigle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WigleResponse {
+    pub api_name: String,
+    pub enabled: bool,
+}
+
+/// WIGLE config update request for POST /api/wigle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WigleUpdate {
+    pub api_name: String,
+    pub api_token: String,
+}
+
 /// Discord webhook configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscordConfig {
@@ -1395,6 +1417,7 @@ pub const API_CHANNELS: &str = "/api/channels";
 pub const API_RAGE: &str = "/api/rage";
 pub const API_LOGS: &str = "/api/logs";
 pub const API_WPASEC: &str = "/api/wpasec";
+pub const API_WIGLE: &str = "/api/wigle";
 pub const API_DISCORD: &str = "/api/discord";
 pub const API_DOWNLOAD_SINGLE: &str = "/api/download/:filename";
 pub const API_DELETE_CAPTURE: &str = "/api/captures/:filename";
@@ -2350,6 +2373,33 @@ async fn wpasec_post_handler(
 }
 
 // ---------------------------------------------------------------------------
+// WIGLE endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/wigle -> JSON WIGLE config (token never returned)
+async fn wigle_get_handler(State(state): State<SharedState>) -> Json<WigleResponse> {
+    let s = state.lock().unwrap();
+    Json(WigleResponse {
+        api_name: s.wigle_api_name.clone(),
+        enabled: !s.wigle_api_name.is_empty() && !s.wigle_api_token.is_empty(),
+    })
+}
+
+/// POST /api/wigle -> set WIGLE API name and token
+async fn wigle_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<WigleUpdate>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.wigle_api_name = body.api_name.clone();
+    s.pending_wigle_config = Some((body.api_name, body.api_token));
+    Json(ActionResponse {
+        ok: true,
+        message: "WIGLE config update queued".into(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Discord webhook endpoints
 // ---------------------------------------------------------------------------
 
@@ -3040,6 +3090,10 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(
             API_WPASEC,
             get(wpasec_get_handler).post(wpasec_post_handler),
+        )
+        .route(
+            API_WIGLE,
+            get(wigle_get_handler).post(wigle_post_handler),
         )
         .route(
             API_DISCORD,

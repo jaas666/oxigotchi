@@ -22,10 +22,12 @@ mod qpu;
 mod radio;
 mod rage;
 mod recovery;
+mod gps;
 mod ssid;
 mod timer;
 mod web;
 mod wifi;
+mod wigle;
 
 use chrono::Timelike;
 use log::info;
@@ -182,6 +184,11 @@ struct Daemon {
     plugin_watcher: Option<lua::PluginWatcher>,
     wpasec_config: capture::WpaSecConfig,
     upload_queue: capture::UploadQueue,
+    wigle_config: wigle::WigleConfig,
+    /// BSSIDs already written to the WIGLE staging CSV (dedup across epochs).
+    wigle_seen: std::collections::HashSet<String>,
+    wigle_upload_timer: WallTimer,
+    wigle_staging_path: std::path::PathBuf,
     discord_webhook_url: String,
     discord_enabled: bool,
     /// Whether AO should auto-hunt channels vs use the configured channel list.
@@ -319,6 +326,10 @@ impl Daemon {
             plugin_watcher: None, // initialized in boot() after plugin dir is confirmed
             wpasec_config: capture::WpaSecConfig::default(),
             upload_queue: capture::UploadQueue::new(),
+            wigle_config: wigle::WigleConfig::default(),
+            wigle_seen: std::collections::HashSet::new(),
+            wigle_upload_timer: WallTimer::new(Duration::from_secs(1800)),
+            wigle_staging_path: std::path::PathBuf::from("/tmp/oxigotchi-wigle.csv"),
             discord_webhook_url: String::new(),
             discord_enabled: false,
             autohunt: true,
@@ -903,6 +914,37 @@ impl Daemon {
             self.ssid_resolver.flush();
         }
 
+        // ---- WIGLE observation logging (RAGE mode, gated on GPS fix) ----
+        if self.mode == OperatingMode::Rage && self.wigle_config.enabled {
+            if let Some(fix) = gps::query_gpsd() {
+                let new_obs: Vec<wigle::WigleObservation> = self
+                    .ao
+                    .ap_snapshot()
+                    .into_iter()
+                    .filter(|ap| !self.wigle_seen.contains(&ap.bssid))
+                    .map(|ap| wigle::WigleObservation {
+                        bssid: ap.bssid,
+                        channel: ap.channel,
+                    })
+                    .collect();
+                if !new_obs.is_empty() {
+                    for obs in &new_obs {
+                        self.wigle_seen.insert(obs.bssid.clone());
+                    }
+                    match wigle::append_observations(
+                        &self.wigle_staging_path,
+                        &new_obs,
+                        &fix,
+                        &self.ssid_resolver,
+                        &self.config.name,
+                    ) {
+                        Ok(n) => log::debug!("WIGLE: logged {n} new AP(s)"),
+                        Err(e) => log::warn!("WIGLE: append failed: {e}"),
+                    }
+                }
+            }
+        }
+
         // ---- Display phase ----
         self.epoch_loop.next_phase(); // -> Display
 
@@ -1414,7 +1456,21 @@ impl Daemon {
             }
         }
 
-        // 5b. Fetch cracked passwords from WPA-SEC (every 25 min wall-clock)
+        // 5b. Upload WIGLE staging CSV (every 30 min wall-clock)
+        if self.wigle_upload_timer.due() && self.wigle_config.enabled {
+            let internet_available = self.network.internet == network::InternetStatus::Online
+                || self.bluetooth.internet_available;
+            if internet_available {
+                match wigle::upload_to_wigle(&self.wigle_staging_path, &self.wigle_config) {
+                    Ok(()) => info!("WIGLE: upload complete"),
+                    Err(e) => log::warn!("WIGLE: upload failed: {e}"),
+                }
+            } else {
+                log::debug!("WIGLE upload skipped: internet unavailable");
+            }
+        }
+
+        // 5c. Fetch cracked passwords from WPA-SEC (every 25 min wall-clock)
         if self.wpasec_fetch_timer.due()
             && self.wpasec_config.enabled
             && !self.ao_paused_for_bt_scan
@@ -2327,6 +2383,19 @@ impl Daemon {
                 "web: WPA-SEC key updated, enabled={}",
                 self.wpasec_config.enabled
             );
+            any_command = true;
+        }
+
+        // Process pending WIGLE config
+        let wigle_config = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_wigle_config.take()
+        };
+        if let Some((name, token)) = wigle_config {
+            self.wigle_config.enabled = !name.is_empty() && !token.is_empty();
+            self.wigle_config.api_name = name;
+            self.wigle_config.api_token = token;
+            info!("web: WIGLE config updated, enabled={}", self.wigle_config.enabled);
             any_command = true;
         }
 
@@ -3257,6 +3326,8 @@ impl Daemon {
 
         // Sync WPA-SEC and Discord config for web dashboard
         s.wpasec_api_key = self.wpasec_config.api_key.clone();
+        s.wigle_api_name = self.wigle_config.api_name.clone();
+        s.wigle_api_token = self.wigle_config.api_token.clone();
         s.discord_webhook_url = self.discord_webhook_url.clone();
         s.discord_enabled = self.discord_enabled;
 

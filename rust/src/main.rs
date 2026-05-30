@@ -189,6 +189,8 @@ struct Daemon {
     wigle_seen: std::collections::HashSet<String>,
     wigle_upload_timer: WallTimer,
     wigle_staging_path: std::path::PathBuf,
+    /// Whether the last epoch produced a valid GPS fix (used for display indicator).
+    gps_fix_active: bool,
     discord_webhook_url: String,
     discord_enabled: bool,
     /// Whether AO should auto-hunt channels vs use the configured channel list.
@@ -330,6 +332,7 @@ impl Daemon {
             wigle_seen: std::collections::HashSet::new(),
             wigle_upload_timer: WallTimer::new(Duration::from_secs(1800)),
             wigle_staging_path: std::path::PathBuf::from("/tmp/oxigotchi-wigle.csv"),
+            gps_fix_active: false,
             discord_webhook_url: String::new(),
             discord_enabled: false,
             autohunt: true,
@@ -479,6 +482,7 @@ impl Daemon {
             lua::PluginConfig::default_for("www", 52, 112),
             lua::PluginConfig::default_for("bt_status", 96, 112),
             lua::PluginConfig::default_for("battery", 140, 112),
+            lua::PluginConfig::default_for("wigle_gps", 185, 112),
             lua::PluginConfig::default_for("mode", 214, 112),
             lua::PluginConfig::default_for("bt_summary", 0, 0),
             lua::PluginConfig::default_for("bt_devices", 0, 0),
@@ -916,7 +920,9 @@ impl Daemon {
 
         // ---- WIGLE observation logging (RAGE mode, gated on GPS fix) ----
         if self.mode == OperatingMode::Rage && self.wigle_config.enabled {
-            if let Some(fix) = gps::query_gpsd() {
+            let fix = gps::query_gpsd();
+            self.gps_fix_active = fix.is_some();
+            if let Some(fix) = fix {
                 let new_obs: Vec<wigle::WigleObservation> = self
                     .ao
                     .ap_snapshot()
@@ -2624,6 +2630,8 @@ impl Daemon {
             epoch_phase_status: self.epoch_loop.status_message(),
             joke_active: self.epoch_loop.personality.joke_active(),
             skip_captured: self.skip_captured,
+            wigle_enabled: self.wigle_config.enabled,
+            gps_fix: self.gps_fix_active,
             fw_crash_suppress: self.firmware_monitor.crash_suppress,
             fw_hardfault: self.firmware_monitor.hardfault,
             fw_health: format!("{:?}", self.firmware_monitor.health()),

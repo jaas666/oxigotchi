@@ -71,6 +71,10 @@ pub struct EpochState {
     // smart skip
     pub skip_captured: bool,
 
+    // wigle / gps
+    pub wigle_enabled: bool,
+    pub gps_fix: bool,
+
     // system
     pub cpu_temp: f32,
     pub mem_used_mb: u32,
@@ -137,6 +141,9 @@ impl EpochState {
         t.set("fw_health", self.fw_health.as_str())?;
 
         t.set("skip_captured", self.skip_captured)?;
+
+        t.set("wigle_enabled", self.wigle_enabled)?;
+        t.set("gps_fix", self.gps_fix)?;
 
         t.set("cpu_temp", self.cpu_temp)?;
         t.set("mem_used_mb", self.mem_used_mb)?;

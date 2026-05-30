@@ -203,4 +203,90 @@ mod tests {
         assert!(bssid_to_mac("short").is_none());
         assert!(bssid_to_mac("zzzzzzzzzzzz").is_none());
     }
+
+    #[test]
+    fn test_append_observations_creates_valid_csv() {
+        use crate::gps::GpsFix;
+        use crate::ssid::SsidResolver;
+        use std::fs;
+
+        let dir = std::env::temp_dir().join("wigle_test_append");
+        fs::create_dir_all(&dir).unwrap();
+        let staging = dir.join("test.wiglecsv");
+        let _ = fs::remove_file(&staging); // start clean
+
+        let fix = GpsFix { lat: 51.5074, lon: -0.1278, alt: 24.0, accuracy: 5.0 };
+        let resolver = SsidResolver::new(dir.join("ssid.json"));
+        let obs = vec![
+            WigleObservation { bssid: "aabbccddeeff".into(), channel: 6 },
+            WigleObservation { bssid: "001122334455".into(), channel: 11 },
+        ];
+
+        let written = append_observations(&staging, &obs, &fix, &resolver, "testbot").unwrap();
+        assert_eq!(written, 2);
+
+        let content = fs::read_to_string(&staging).unwrap();
+        // Header lines present
+        assert!(content.contains("WigleWifi-1.4"));
+        assert!(content.contains("MAC,SSID,AuthMode"));
+        // Data rows present with correct MAC format and coordinates
+        assert!(content.contains("AA:BB:CC:DD:EE:FF"));
+        assert!(content.contains("00:11:22:33:44:55"));
+        assert!(content.contains("51.507400"));
+        assert!(content.contains("-0.127800"));
+        assert!(content.contains(",6,"));
+        assert!(content.contains(",11,"));
+
+        // Appending again should NOT re-write the header
+        let obs2 = vec![WigleObservation { bssid: "ffeeddccbbaa".into(), channel: 1 }];
+        append_observations(&staging, &obs2, &fix, &resolver, "testbot").unwrap();
+        let content2 = fs::read_to_string(&staging).unwrap();
+        assert_eq!(content2.matches("WigleWifi-1.4").count(), 1);
+        assert!(content2.contains("FF:EE:DD:CC:BB:AA"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_append_observations_empty_is_noop() {
+        use crate::gps::GpsFix;
+        use crate::ssid::SsidResolver;
+
+        let dir = std::env::temp_dir().join("wigle_test_noop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let staging = dir.join("noop.wiglecsv");
+
+        let fix = GpsFix { lat: 0.0, lon: 0.0, alt: 0.0, accuracy: 0.0 };
+        let resolver = SsidResolver::new(dir.join("ssid.json"));
+
+        let written = append_observations(&staging, &[], &fix, &resolver, "testbot").unwrap();
+        assert_eq!(written, 0);
+        assert!(!staging.exists()); // file should not be created for empty input
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_ssid_with_comma_is_quoted() {
+        use crate::gps::GpsFix;
+        use crate::ssid::SsidResolver;
+        use std::fs;
+
+        let dir = std::env::temp_dir().join("wigle_test_csv_escape");
+        fs::create_dir_all(&dir).unwrap();
+        let staging = dir.join("escape.wiglecsv");
+        let _ = fs::remove_file(&staging);
+
+        let fix = GpsFix { lat: 1.0, lon: 2.0, alt: 0.0, accuracy: 0.0 };
+        let mut resolver = SsidResolver::new(dir.join("ssid.json"));
+        // Insert an SSID containing a comma
+        resolver.insert([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff], "Free,WiFi");
+        let obs = vec![WigleObservation { bssid: "aabbccddeeff".into(), channel: 6 }];
+
+        append_observations(&staging, &obs, &fix, &resolver, "testbot").unwrap();
+        let content = fs::read_to_string(&staging).unwrap();
+        assert!(content.contains("\"Free,WiFi\""));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

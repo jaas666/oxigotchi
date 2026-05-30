@@ -146,7 +146,7 @@ class TestWebAPI:
 
 EXPECTED_PLUGINS = [
     "ao_status", "aps", "battery", "bt_status", "crash",
-    "ip_display", "mode", "status_msg", "sys_stats", "uptime", "www",
+    "ip_display", "mode", "status_msg", "sys_stats", "uptime", "wigle_gps", "www",
 ]
 
 

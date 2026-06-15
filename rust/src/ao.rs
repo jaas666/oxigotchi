@@ -202,6 +202,7 @@ impl AoManager {
         }
         if self.gpsd_detected {
             args.push("--gpsd".into());
+            args.push("127.0.0.1:2947".into());
         }
         // Write whitelist file and pass to AO if entries exist
         if !self.config.whitelist.is_empty() {

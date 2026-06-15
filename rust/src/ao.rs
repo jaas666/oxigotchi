@@ -200,9 +200,6 @@ impl AoManager {
         if self.config.no_setup {
             args.push("--no-setup".into());
         }
-        if self.gpsd_detected {
-            args.push("--gpsd".into());
-        }
         // Write whitelist file and pass to AO if entries exist
         if !self.config.whitelist.is_empty() {
             let wl_path = "/tmp/ao_whitelist.txt";

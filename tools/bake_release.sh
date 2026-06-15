@@ -451,6 +451,24 @@ sudo mkdir -p "$PI/etc/cloud"
 sudo touch "$PI/etc/cloud/cloud-init.disabled"
 echo "  cloud-init disabled"
 
+# Hold raspi-firmware: newer versions update the BCM43430 device tree in a way
+# that drops b0 revision detection, causing brcmfmac to load stock Cypress
+# firmware via the non-b0 symlink instead of the nexmon-patched brcmfmac43436-sdio.bin.
+sudo chroot "$PI" apt-mark hold raspi-firmware 2>/dev/null || true
+echo "  raspi-firmware held (prevents DTB changes that break nexmon firmware path)"
+
+# Belt-and-suspenders firmware symlink fix: redirect the non-b0 model-specific
+# path to the nexmon-patched firmware directly, so monitor mode works regardless
+# of whether the kernel detects the BCM43430 B0 chip revision.
+FIRMWARE_DIR="$PI/lib/firmware/brcm"
+if [ -f "$FIRMWARE_DIR/brcmfmac43436-sdio.bin" ]; then
+    sudo ln -sf brcmfmac43436-sdio.bin \
+        "$FIRMWARE_DIR/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin"
+    echo "  WiFi firmware symlink fixed: brcmfmac43430-sdio -> brcmfmac43436-sdio.bin"
+else
+    echo "  WARN: brcmfmac43436-sdio.bin not found — nexmon firmware symlink not set"
+fi
+
 # ─── 14. Disable unwanted services ───
 echo ""
 echo "=== 14. Disable unwanted services ==="
